@@ -1,0 +1,11 @@
+snowflake-snowpark-python[pandas]
+snowflake-connector-python[pandas]
+
+pandas>=2.2.0
+pyarrow>=18.0.0
+
+requests>=2.32.0
+python-dotenv>=1.0.1
+
+jupyter
+ipykernel
