@@ -4,7 +4,7 @@ End-to-End Model Inference Pipeline
 
 Workflow:
 1. Load the serving model version from the registry
-2. Load new, unseen data
+2. Load new, unseen data from Snowflake
 3. Predict inside Snowflake
 4. Return the predictions
 
@@ -12,7 +12,7 @@ With no version_name given, the registry's default version serves.
 Promoting a new default therefore changes what runs here, with no
 code change.
 """
-import pandas as pd
+from snowflake.snowpark import functions as F
 
 from config.model_config import *
 
@@ -22,20 +22,20 @@ from utils.model_registry import (
 )
 
 
-def load_new_data(session, csv_path=TEST_DATA_PATH, n_rows=10):
-    """Load unseen rows from CSV as a Snowpark DataFrame."""
-    new_data_pdf = (
-        pd.read_csv(csv_path)
-        .sort_values("TIMESTAMP")
-        .tail(n_rows)
+def load_new_data(session, table_name=TEST_TABLE_NAME, n_rows=10):
+    """Load the most recent unseen rows from a Snowflake table."""
+    new_data_df = (
+        session.table(table_name)
+        .sort(F.col("TIMESTAMP").desc())
+        .limit(n_rows)
     )
 
-    print(f"Loaded {len(new_data_pdf)} new rows")
+    print(f"Loaded {new_data_df.count()} new rows from {table_name}")
 
-    return session.create_dataframe(new_data_pdf)
+    return new_data_df
 
 
-def run(session, version_name=None, n_rows=10, csv_path=TEST_DATA_PATH):
+def run(session, version_name=None, n_rows=10, table_name=TEST_TABLE_NAME):
 
     registry = get_registry(session)
 
@@ -49,7 +49,7 @@ def run(session, version_name=None, n_rows=10, csv_path=TEST_DATA_PATH):
 
     new_data_df = load_new_data(
         session=session,
-        csv_path=csv_path,
+        table_name=table_name,
         n_rows=n_rows,
     )
 
