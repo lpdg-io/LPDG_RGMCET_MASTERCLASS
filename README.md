@@ -60,7 +60,15 @@ LPDG_RGMCET_MASTERCLASS/
     │
     └── Snowpark/
         ├── data/
-        │   └── test_data.csv             # Held-out test set saved by Preprocessing._Training.ipynb
+        │   └── test_data.csv             # Held-out test set saved by Preprocessing._Training.ipynb;
+        │                                 # uploaded to the Snowflake table TBL_WEATHER_TEST_DATA and
+        │                                 # not read directly by any pipeline after that
+        │
+        ├── procedures/                   # Same pipelines, as Snowflake stored procedures
+        │   ├── Data_Preprocessing.sql        # BUILD_TRAINING_DATA(): features + train/test split
+        │   ├── Model_training.sql            # TRAIN_MODEL(): train, evaluate, register
+        │   ├── Model_Inference.sql           # RUN_INFERENCE(input_table, output_table): predict
+        │   └── run.py                        # Registers all three procedures, then calls them in order
         │
         └── src/
             ├── config/
@@ -125,38 +133,18 @@ matters — the wrong kernel silently uses a different environment with differen
 ### 5. Run the notebooks in order
 1. `Weather_API_Exploration.ipynb`
 2. `Weather_Data_Ingestion.ipynb` (creates `TBL_WEATHER_DATA` in Snowflake)
-3. `Preprocessing._Training.ipynb` (trains the model, saves `test_data.csv` and `temperature_model.joblib`)
-4. `Registry_Inference.ipynb` (registers the model and runs inference)
+3. `Preprocessing._Training.ipynb` (trains the model, saves `temperature_model.joblib` and a local `test_data.csv`)
+4. `Registry_Inference.ipynb` (uploads `test_data.csv` into the Snowflake table `TBL_WEATHER_TEST_DATA`,
+   registers the model, and runs inference — everything after that upload step reads from this table,
+   not the CSV)
 
 `Snowflake_connector.ipynb` is a reference notebook and can be run independently at any time to
 verify your `.env` and connection are working.
 
 ### 6. Run the pipelines directly (no notebooks)
-The same logic as the notebooks is also available as plain Python, for automation or CI:
-```powershell
-cd "SCH_LPDG_RGMCET_MASTERCLASS\Snowpark\src"
-python -c "
-from utils.snowflake_connection import get_session
-from pipelines.model_registry_pipeline import run as run_registry
-from pipelines.model_inference_pipeline import run as run_inference
-
-session = get_session('dev')
-
-version_name, metrics = run_registry(session)   # trains + registers the next version
-print(version_name, metrics)
-
-predictions = run_inference(session)            # predicts using the current default version
-predictions.show()
-"
-```
-Each run of `model_registry_pipeline` registers a new version (V1, V2, V3, …) automatically —
-it never overwrites an existing one. Promoting a version to "default" (so inference serves it)
-is a separate, deliberate step:
-```python
-from utils.model_registry import get_registry, set_default_version
-registry = get_registry(session)
-set_default_version(registry, "WEATHER_TEMPERATURE_MODEL", "V3")
-```
+The same logic as the notebooks is also available as plain Python or as Snowflake stored
+procedures, for automation or CI — see "Running Each Pipeline Step by Step" below for the
+exact commands.
 
 ---
 
@@ -170,77 +158,57 @@ cd "SCH_LPDG_RGMCET_MASTERCLASS\Snowpark\src"
 
 ### Step 1 — Weather ingestion pipeline
 Fetches historical weather data from Open-Meteo and loads it into `TBL_WEATHER_DATA` in
-Snowflake. Run this first — every later step reads from this table.
+Snowflake. Run this first — every later step reads from this table. Location and date range
+come from `config/weather_config.py` — edit that file to change them, not the pipeline code.
 ```powershell
-python -c "
-from utils.snowflake_connection import get_session
-from pipelines.weather_ingestion_pipeline import run as run_ingestion
-
-session = get_session('dev')
-run_ingestion(session)
-"
+python -c "from utils.snowflake_connection import get_session; from pipelines.weather_ingestion_pipeline import run; run(get_session('dev'))"
 ```
-Location and date range come from `config/weather_config.py` — edit that file to change them,
-not the pipeline code.
 
 ### Step 2 — Model registry pipeline
 Builds features from `TBL_WEATHER_DATA`, trains a Random Forest, evaluates it, and registers it
-in the Snowflake Model Registry as the next version (V1, V2, V3, …).
+in the Snowflake Model Registry as the next version (V1, V2, V3, …). Never overwrites a
+previous version.
 ```powershell
-python -c "
-from utils.snowflake_connection import get_session
-from pipelines.model_registry_pipeline import run as run_registry
-
-session = get_session('dev')
-version_name, metrics = run_registry(session)
-print('Registered:', version_name, metrics)
-"
+python -c "from utils.snowflake_connection import get_session; from pipelines.model_registry_pipeline import run; print(run(get_session('dev')))"
 ```
-This never overwrites a previous version. To make the new version the one that actually serves
-predictions, promote it explicitly:
+To make the new version the one that actually serves predictions, promote it explicitly
+(use the version name printed above):
 ```powershell
-python -c "
-from utils.snowflake_connection import get_session
-from utils.model_registry import get_registry, set_default_version
-
-session = get_session('dev')
-registry = get_registry(session)
-set_default_version(registry, 'WEATHER_TEMPERATURE_MODEL', 'V3')  # use the version printed above
-"
+python -c "from utils.snowflake_connection import get_session; from utils.model_registry import get_registry, set_default_version; set_default_version(get_registry(get_session('dev')), 'WEATHER_TEMPERATURE_MODEL', 'V3')"
 ```
 
 ### Step 3 — Model inference pipeline
-Loads the current default (or a named) model version from the registry and predicts on new data.
+Loads the current default (or a named) model version from the registry and predicts on
+`TBL_WEATHER_TEST_DATA`.
 ```powershell
-python -c "
-from utils.snowflake_connection import get_session
-from pipelines.model_inference_pipeline import run as run_inference
-
-session = get_session('dev')
-predictions = run_inference(session)   # uses the default version, Snowpark/data/test_data.csv
-predictions.show()
-"
+python -c "from utils.snowflake_connection import get_session; from pipelines.model_inference_pipeline import run; run(get_session('dev')).show()"
 ```
 
 ### Running inference on your own new data
-`run_inference` takes a `csv_path`, so you don't need to touch pipeline code to score a different
-file — just point it at your own CSV (same columns as `Snowpark/data/test_data.csv`: `TIMESTAMP`,
-`TEMPERATURE`, `HUMIDITY`, `PRESSURE`, `WIND_SPEED`, `PRECIPITATION`, `CLOUD_COVER`):
+`run` takes a `table_name`, so you don't need to touch pipeline code to score different data —
+just point it at any Snowflake table with the same columns as `TBL_WEATHER_TEST_DATA`
+(`TIMESTAMP`, `TEMPERATURE`, and the lag/`HOUR` feature columns):
 ```powershell
-python -c "
-from utils.snowflake_connection import get_session
-from pipelines.model_inference_pipeline import run as run_inference
-
-session = get_session('dev')
-predictions = run_inference(session, csv_path='C:/path/to/your_new_data.csv', n_rows=20)
-predictions.show()
-"
+python -c "from utils.snowflake_connection import get_session; from pipelines.model_inference_pipeline import run; run(get_session('dev'), table_name='MY_NEW_TABLE', n_rows=20).show()"
 ```
 To serve a specific model version instead of whatever is currently default, pass `version_name`
-too: `run_inference(session, version_name="V2", csv_path="...")`.
+too: `run(session, version_name="V2", table_name="MY_NEW_TABLE")`.
 
-Your new data still needs to go through the same cleaning your training data did — no missing
-`TEMPERATURE` rows, and the lag columns (`TEMPERATURE_LAG_1`, `HUMIDITY_LAG_1`, etc.) already
-computed, since `run_inference` predicts directly on what you give it rather than rebuilding
-those features itself. If your new data is raw (no lag columns yet), engineer it first with
-`utils/feature_engineering.py`'s `build_features()`, using a Snowpark table instead of a CSV.
+Your new table needs the same lag columns as `TBL_WEATHER_TEST_DATA` (`TEMPERATURE_LAG_1`,
+`HUMIDITY_LAG_1`, etc.) already computed, since this pipeline predicts directly on what you give
+it rather than rebuilding features. If your new data is raw, engineer it first with
+`utils/feature_engineering.py`'s `build_features()`.
+
+### Alternative: run everything as Snowflake stored procedures
+The same three steps are also available as SQL stored procedures in `Snowpark/procedures/`,
+registered and run from one script:
+```powershell
+cd "SCH_LPDG_RGMCET_MASTERCLASS\Snowpark\procedures"
+python run.py
+```
+This registers `BUILD_TRAINING_DATA()`, `TRAIN_MODEL()`, and `RUN_INFERENCE()` in Snowflake and
+calls them in order. Once registered, they can also be called directly from SQL — including on
+new data by passing a table name:
+```sql
+CALL RUN_INFERENCE('MY_NEW_TABLE', 'MY_PREDICTIONS');
+```
