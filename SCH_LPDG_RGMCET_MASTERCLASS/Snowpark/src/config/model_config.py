@@ -10,8 +10,6 @@ Students can modify:
 without changing the pipeline code.
 """
 
-from pathlib import Path
-
 # Table created by the weather ingestion pipeline
 SOURCE_TABLE = "TBL_WEATHER_DATA"
 
@@ -53,6 +51,6 @@ SPLIT_FRACTION = 0.8
 N_ESTIMATORS = 100
 RANDOM_STATE = 42
 
-# Held-out data used to demonstrate inference
-DATA_DIR = Path(__file__).resolve().parents[2] / "data"
-TEST_DATA_PATH = DATA_DIR / "test_data.csv"
+# Held-out data used to demonstrate inference, loaded from Snowflake
+# (see the "Upload test_data.csv to Snowflake" cell in Registry_Inference.ipynb)
+TEST_TABLE_NAME = "TBL_WEATHER_TEST_DATA"
