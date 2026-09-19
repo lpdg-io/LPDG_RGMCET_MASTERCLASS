@@ -11,7 +11,7 @@ from snowflake.snowpark import Window
 from snowflake.snowpark import functions as F
 from snowflake.snowpark.context import get_active_session
 
-# --- Config (from config/model_config.py) ---
+# --- Config (from config/model_config.py) --- commit test from branch
 SOURCE_TABLE      = "TBL_WEATHER_DATA"
 TARGET_COLUMN     = "TEMPERATURE"
 COLUMNS_TO_DROP   = ["LATITUDE", "LONGITUDE", "TIMEZONE", "ELEVATION"]
